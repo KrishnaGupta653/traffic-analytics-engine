@@ -1,0 +1,29 @@
+{
+  "name": "traffic-analytics-sdk",
+  "version": "1.0.0",
+  "description": "Zero-dependency client telemetry SDK for traffic analytics",
+  "main": "src/index.js",
+  "types": "index.d.ts",
+  "files": [
+    "src/",
+    "dist/",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "npm run build:dev && npm run build:prod",
+    "build:dev": "cat src/session-hasher.js src/command-dispatcher.js src/tracker.js > dist/tracker.js",
+    "build:prod": "terser dist/tracker.js -o dist/tracker.min.js --compress --mangle"
+  },
+  "keywords": [
+    "analytics",
+    "telemetry",
+    "tracking",
+    "session",
+    "fingerprinting"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "terser": "^5.26.0"
+  }
+}

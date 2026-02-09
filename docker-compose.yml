@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # Redis - Pub/Sub and Caching
+  redis:
+    image: redis:7-alpine
+    container_name: traffic-analytics-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # PostgreSQL - Session Metadata
+  postgres:
+    image: postgres:16-alpine
+    container_name: traffic-analytics-postgres
+    environment:
+      POSTGRES_DB: traffic_analytics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/postgres/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ClickHouse - Event Analytics
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: traffic-analytics-clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./database/clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    environment:
+      CLICKHOUSE_DB: traffic_analytics
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Backend Server
+  server:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+    container_name: traffic-analytics-server
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: traffic_analytics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      
+      CLICKHOUSE_URL: http://clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: traffic_analytics
+      
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Dashboard (Next.js)
+  dashboard:
+    build:
+      context: ./packages/dashboard
+      dockerfile: Dockerfile
+    container_name: traffic-analytics-dashboard
+    ports:
+      - "3001:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000
+      NEXT_PUBLIC_WS_URL: ws://localhost:3000
+      NEXT_PUBLIC_ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  postgres-data:
+  clickhouse-data:
+
+networks:
+  default:
+    name: traffic-analytics-network
