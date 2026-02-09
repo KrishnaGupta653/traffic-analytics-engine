@@ -2,6 +2,7 @@
   "name": "traffic-analytics-dashboard",
   "version": "1.0.0",
   "description": "Next.js Dashboard for Traffic Analytics Control Center",
+  "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
