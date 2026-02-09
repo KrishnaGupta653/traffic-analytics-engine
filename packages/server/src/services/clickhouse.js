@@ -1,94 +1,163 @@
 /**
  * ClickHouse Service - High-Volume Event Logging
- * Optimized for time-series analytics
+ * FIXED: Using @clickhouse/client (correct library)
+ * 
+ * CRITICAL FIXES:
+ * 1. Replaced deprecated 'clickhouse' with '@clickhouse/client'
+ * 2. Fixed IP address handling (IPv4 to integer)
+ * 3. Added proper error recovery
+ * 4. Fixed SQL injection vulnerabilities
+ * 5. Added query parameterization
  */
 
-const { ClickHouse } = require('clickhouse');
+const { createClient } = require('@clickhouse/client');
 
 class ClickHouseService {
   constructor(config = {}) {
-    this.client = new ClickHouse({
-      url: config.url || process.env.CLICKHOUSE_URL || 'http://localhost',
-      port: config.port || process.env.CLICKHOUSE_PORT || 8123,
-      debug: config.debug || false,
-      basicAuth: config.basicAuth || null,
-      isUseGzip: config.isUseGzip !== undefined ? config.isUseGzip : true,
-      format: 'json',
-      config: {
-        database: config.database || process.env.CLICKHOUSE_DB || 'traffic_analytics'
-      }
+    // SECURITY: Never log connection details
+    this.client = createClient({
+      host: config.url || process.env.CLICKHOUSE_URL || 'http://localhost:8123',
+      database: config.database || process.env.CLICKHOUSE_DB || 'traffic_analytics',
+      compression: {
+        request: true,
+        response: true
+      },
+      // PERFORMANCE: Set timeouts
+      request_timeout: 30000,
+      max_open_connections: 10
     });
 
     this.database = config.database || 'traffic_analytics';
     this.batchSize = config.batchSize || 100;
     this.flushInterval = config.flushInterval || 5000;
 
-    // Event batch queue
+    // MEMORY LEAK FIX: Cap queue size
+    this.MAX_QUEUE_SIZE = 10000;
     this.eventQueue = [];
     this.flushTimer = null;
+    this.isShuttingDown = false;
 
-    // Start flush timer
     this.startFlushTimer();
-
     console.log('[ClickHouse] Service initialized');
   }
 
   /**
-   * Log single event
+   * Log single event with validation
    */
   async logEvent(event) {
+    if (this.isShuttingDown) {
+      console.warn('[ClickHouse] Rejecting event during shutdown');
+      return;
+    }
+
+    // MEMORY LEAK FIX: Prevent unbounded queue growth
+    if (this.eventQueue.length >= this.MAX_QUEUE_SIZE) {
+      console.error('[ClickHouse] Queue full, dropping event');
+      return;
+    }
+
     const row = this.formatEventRow(event);
     this.eventQueue.push(row);
 
-    // Flush if batch size reached
     if (this.eventQueue.length >= this.batchSize) {
       await this.flush();
     }
   }
 
   /**
-   * Format event for ClickHouse
+   * Format and VALIDATE event data
    */
   formatEventRow(event) {
+    // VALIDATION: Ensure required fields exist
+    if (!event.sessionHash || typeof event.sessionHash !== 'string') {
+      throw new Error('Invalid session hash');
+    }
+
     return {
-      event_id: event.eventId || null,
+      // SECURITY: Sanitize all inputs
+      session_hash: String(event.sessionHash).substring(0, 64),
+      event_type: String(event.eventType || event.type || 'unknown').substring(0, 50),
       timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-      session_hash: event.sessionHash || '',
-      event_type: event.eventType || event.type || 'unknown',
       
-      ip_address: event.ipAddress || '0.0.0.0',
-      user_agent: event.userAgent || '',
+      // IP handling with validation
+      ip_address: this.ipToInt(event.ipAddress || '0.0.0.0'),
+      user_agent: String(event.userAgent || '').substring(0, 500),
       
-      country: event.country || event.geoip?.country || '',
-      city: event.city || event.geoip?.city || '',
-      isp: event.isp || '',
-      latitude: event.latitude || event.geoip?.latitude || 0,
-      longitude: event.longitude || event.geoip?.longitude || 0,
+      // GeoIP with bounds checking
+      country: String(event.country || event.geoip?.country || '').substring(0, 2),
+      city: String(event.city || event.geoip?.city || '').substring(0, 100),
+      isp: String(event.isp || '').substring(0, 255),
+      latitude: this.clampFloat(event.latitude || event.geoip?.latitude || 0, -90, 90),
+      longitude: this.clampFloat(event.longitude || event.geoip?.longitude || 0, -180, 180),
       
-      screen_width: event.screenWidth || event.metadata?.screenWidth || 0,
-      screen_height: event.screenHeight || event.metadata?.screenHeight || 0,
-      timezone: event.timezone || event.metadata?.timezone || 'Unknown',
-      network_type: event.networkType || event.metadata?.networkType || 'unknown',
-      battery_level: event.batteryLevel || event.metadata?.batteryLevel || null,
+      // Device metadata with validation
+      screen_width: this.clampInt(event.screenWidth || event.metadata?.screenWidth || 0, 0, 10000),
+      screen_height: this.clampInt(event.screenHeight || event.metadata?.screenHeight || 0, 0, 10000),
+      timezone: String(event.timezone || event.metadata?.timezone || 'Unknown').substring(0, 50),
+      network_type: String(event.networkType || event.metadata?.networkType || 'unknown').substring(0, 20),
+      battery_level: this.clampInt(event.batteryLevel || event.metadata?.batteryLevel, 0, 100, true),
       
-      interaction_type: event.interactionType || '',
-      element_tag: event.element?.tag || null,
-      element_id: event.element?.id || null,
-      element_class: event.element?.class || null,
-      page_url: event.pageUrl || '',
+      // Interaction data
+      interaction_type: String(event.interactionType || '').substring(0, 50),
+      element_tag: event.element?.tag ? String(event.element.tag).substring(0, 50) : null,
+      element_id: event.element?.id ? String(event.element.id).substring(0, 100) : null,
+      element_class: event.element?.class ? String(event.element.class).substring(0, 200) : null,
+      page_url: String(event.pageUrl || '').substring(0, 1000),
       
-      latency_ms: event.latencyMs || 0,
-      is_throttled: event.isThrottled || 0,
+      // Performance metrics
+      latency_ms: this.clampInt(event.latencyMs || 0, 0, 60000),
+      is_throttled: event.isThrottled ? 1 : 0,
       
-      risk_score: event.riskScore || 0,
-      is_bot: event.isBot || 0,
+      // Risk scoring
+      risk_score: this.clampFloat(event.riskScore || 0, 0, 100),
+      is_bot: event.isBot ? 1 : 0,
       
-      payload: JSON.stringify(event.payload || {})
+      // SECURITY: Sanitize JSON payload
+      payload: JSON.stringify(event.payload || {}).substring(0, 10000)
     };
   }
 
   /**
-   * Flush event queue to ClickHouse
+   * SECURITY: Validate and convert IP to integer
+   */
+  ipToInt(ip) {
+    if (!ip || ip === '0.0.0.0') return 0;
+    
+    // IPv4 validation regex
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const match = ip.match(ipv4Regex);
+    
+    if (!match) return 0;
+    
+    const parts = match.slice(1).map(Number);
+    
+    // Validate octets are 0-255
+    if (parts.some(p => p < 0 || p > 255)) return 0;
+    
+    return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  }
+
+  /**
+   * Clamp integer values
+   */
+  clampInt(value, min, max, nullable = false) {
+    if (nullable && (value === null || value === undefined)) return null;
+    const num = parseInt(value, 10);
+    if (isNaN(num)) return nullable ? null : min;
+    return Math.max(min, Math.min(max, num));
+  }
+
+  /**
+   * Clamp float values
+   */
+  clampFloat(value, min, max) {
+    const num = parseFloat(value);
+    if (isNaN(num)) return 0;
+    return Math.max(min, Math.min(max, num));
+  }
+
+  /**
+   * Flush with error recovery
    */
   async flush() {
     if (this.eventQueue.length === 0) return;
@@ -97,80 +166,41 @@ class ClickHouseService {
     this.eventQueue = [];
 
     try {
-      await this.client.insert(
-        `INSERT INTO ${this.database}.events`,
-        batch
-      ).toPromise();
+      await this.client.insert({
+        table: 'events',
+        values: batch,
+        format: 'JSONEachRow'
+      });
 
-      console.log(`[ClickHouse] Flushed ${batch.length} events`);
+      console.log(`[ClickHouse] ✓ Flushed ${batch.length} events`);
     } catch (error) {
-      console.error('[ClickHouse] Flush error:', error);
-      // Re-queue failed events
-      this.eventQueue.unshift(...batch);
+      console.error('[ClickHouse] ✗ Flush error:', error.message);
+      
+      // ERROR RECOVERY: Re-queue up to 1000 failed events
+      if (this.eventQueue.length < 1000) {
+        this.eventQueue.unshift(...batch.slice(0, 1000 - this.eventQueue.length));
+        console.log(`[ClickHouse] Re-queued ${Math.min(batch.length, 1000)} events`);
+      } else {
+        console.error(`[ClickHouse] DROPPED ${batch.length} events - queue full`);
+      }
     }
   }
 
   /**
-   * Start automatic flush timer
+   * Start flush timer with error handling
    */
   startFlushTimer() {
     this.flushTimer = setInterval(async () => {
-      await this.flush();
+      try {
+        await this.flush();
+      } catch (error) {
+        console.error('[ClickHouse] Timer flush error:', error);
+      }
     }, this.flushInterval);
   }
 
   /**
-   * Log command execution
-   */
-  async logCommandExecution(command) {
-    const row = {
-      command_id: command.commandId,
-      timestamp: new Date(),
-      session_hash: command.sessionHash || '',
-      command_type: command.commandType,
-      admin_id: command.adminId || '',
-      admin_ip: command.adminIp || '0.0.0.0',
-      command_payload: JSON.stringify(command.commandPayload || {}),
-      execution_status: command.status || 'pending',
-      error_message: command.errorMessage || null
-    };
-
-    try {
-      await this.client.insert(
-        `INSERT INTO ${this.database}.command_log`,
-        [row]
-      ).toPromise();
-    } catch (error) {
-      console.error('[ClickHouse] Failed to log command:', error);
-    }
-  }
-
-  /**
-   * Log rate limit violation
-   */
-  async logRateViolation(violation) {
-    const row = {
-      violation_id: null,
-      timestamp: new Date(),
-      session_hash: violation.sessionHash,
-      ip_address: violation.ipAddress,
-      events_per_second: violation.eventsPerSecond,
-      threshold_exceeded: violation.thresholdExceeded,
-      auto_throttled: 1
-    };
-
-    try {
-      await this.client.insert(
-        `INSERT INTO ${this.database}.rate_limit_violations`,
-        [row]
-      ).toPromise();
-    } catch (error) {
-      console.error('[ClickHouse] Failed to log violation:', error);
-    }
-  }
-
-  /**
-   * Query active sessions
+   * SECURITY FIX: Use parameterized queries
    */
   async getActiveSessions(minutesAgo = 5) {
     const query = `
@@ -182,24 +212,28 @@ class ClickHouseService {
         any(city) as city,
         any(country) as country,
         max(risk_score) as risk_score,
-        any(ip_address) as ip_address
-      FROM ${this.database}.events
-      WHERE timestamp >= now() - INTERVAL ${minutesAgo} MINUTE
+        any(IPv4NumToString(ip_address)) as ip_address
+      FROM events
+      WHERE timestamp >= now() - INTERVAL {minutes:UInt8} MINUTE
       GROUP BY session_hash
       ORDER BY last_seen DESC
     `;
 
     try {
-      const result = await this.client.query(query).toPromise();
-      return result;
+      const resultSet = await this.client.query({
+        query,
+        query_params: { minutes: Math.min(Math.max(1, minutesAgo), 1440) }, // Clamp 1-1440
+        format: 'JSONEachRow'
+      });
+      return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error);
+      console.error('[ClickHouse] Query error:', error.message);
       return [];
     }
   }
 
   /**
-   * Query geographic distribution
+   * Geographic distribution with params
    */
   async getGeographicDistribution(hoursAgo = 24) {
     const query = `
@@ -209,24 +243,28 @@ class ClickHouseService {
         count() as events,
         uniq(session_hash) as sessions,
         avg(latency_ms) as avg_latency
-      FROM ${this.database}.events
-      WHERE timestamp >= now() - INTERVAL ${hoursAgo} HOUR
+      FROM events
+      WHERE timestamp >= now() - INTERVAL {hours:UInt16} HOUR
       GROUP BY country, city
       ORDER BY events DESC
       LIMIT 100
     `;
 
     try {
-      const result = await this.client.query(query).toPromise();
-      return result;
+      const resultSet = await this.client.query({
+        query,
+        query_params: { hours: Math.min(Math.max(1, hoursAgo), 720) },
+        format: 'JSONEachRow'
+      });
+      return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error);
+      console.error('[ClickHouse] Query error:', error.message);
       return [];
     }
   }
 
   /**
-   * Query bot detection candidates
+   * Bot detection with params
    */
   async getBotCandidates(hoursAgo = 1) {
     const query = `
@@ -236,10 +274,10 @@ class ClickHouseService {
         uniq(event_type) as unique_events,
         avg(latency_ms) as avg_latency,
         sum(is_throttled) as throttle_count,
-        any(ip_address) as ip_address,
+        any(IPv4NumToString(ip_address)) as ip_address,
         any(city) as city
-      FROM ${this.database}.events
-      WHERE timestamp >= now() - INTERVAL ${hoursAgo} HOUR
+      FROM events
+      WHERE timestamp >= now() - INTERVAL {hours:UInt8} HOUR
       GROUP BY session_hash
       HAVING event_count > 100 AND unique_events < 3
       ORDER BY event_count DESC
@@ -247,18 +285,27 @@ class ClickHouseService {
     `;
 
     try {
-      const result = await this.client.query(query).toPromise();
-      return result;
+      const resultSet = await this.client.query({
+        query,
+        query_params: { hours: Math.min(Math.max(1, hoursAgo), 24) },
+        format: 'JSONEachRow'
+      });
+      return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error);
+      console.error('[ClickHouse] Query error:', error.message);
       return [];
     }
   }
 
   /**
-   * Query session timeline
+   * Session timeline with SECURITY
    */
   async getSessionTimeline(sessionHash, limit = 100) {
+    // SECURITY: Validate session hash format
+    if (!/^[a-f0-9]{64}$/.test(sessionHash)) {
+      throw new Error('Invalid session hash format');
+    }
+
     const query = `
       SELECT 
         timestamp,
@@ -267,23 +314,30 @@ class ClickHouseService {
         page_url,
         latency_ms,
         is_throttled
-      FROM ${this.database}.events
-      WHERE session_hash = '${sessionHash}'
+      FROM events
+      WHERE session_hash = {hash:String}
       ORDER BY timestamp DESC
-      LIMIT ${limit}
+      LIMIT {limit:UInt16}
     `;
 
     try {
-      const result = await this.client.query(query).toPromise();
-      return result;
+      const resultSet = await this.client.query({
+        query,
+        query_params: {
+          hash: sessionHash,
+          limit: Math.min(Math.max(1, limit), 1000)
+        },
+        format: 'JSONEachRow'
+      });
+      return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error);
+      console.error('[ClickHouse] Query error:', error.message);
       return [];
     }
   }
 
   /**
-   * Get analytics summary
+   * Analytics summary
    */
   async getAnalyticsSummary(hoursAgo = 24) {
     const query = `
@@ -295,16 +349,72 @@ class ClickHouseService {
         sum(is_bot) as bot_events,
         uniq(country) as countries,
         uniq(city) as cities
-      FROM ${this.database}.events
-      WHERE timestamp >= now() - INTERVAL ${hoursAgo} HOUR
+      FROM events
+      WHERE timestamp >= now() - INTERVAL {hours:UInt16} HOUR
     `;
 
     try {
-      const result = await this.client.query(query).toPromise();
+      const resultSet = await this.client.query({
+        query,
+        query_params: { hours: Math.min(Math.max(1, hoursAgo), 720) },
+        format: 'JSONEachRow'
+      });
+      const result = await resultSet.json();
       return result[0] || {};
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error);
+      console.error('[ClickHouse] Query error:', error.message);
       return {};
+    }
+  }
+
+  /**
+   * Log command execution
+   */
+  async logCommandExecution(command) {
+    const row = {
+      command_id: command.commandId,
+      timestamp: new Date(),
+      session_hash: String(command.sessionHash || '').substring(0, 64),
+      command_type: String(command.commandType).substring(0, 50),
+      admin_id: String(command.adminId || '').substring(0, 100),
+      admin_ip: this.ipToInt(command.adminIp || '0.0.0.0'),
+      command_payload: JSON.stringify(command.commandPayload || {}).substring(0, 5000),
+      execution_status: String(command.status || 'pending').substring(0, 20),
+      error_message: command.errorMessage ? String(command.errorMessage).substring(0, 500) : null
+    };
+
+    try {
+      await this.client.insert({
+        table: 'command_log',
+        values: [row],
+        format: 'JSONEachRow'
+      });
+    } catch (error) {
+      console.error('[ClickHouse] Failed to log command:', error.message);
+    }
+  }
+
+  /**
+   * Log rate violation
+   */
+  async logRateViolation(violation) {
+    const row = {
+      timestamp: new Date(),
+      session_hash: String(violation.sessionHash).substring(0, 64),
+      ip_address: this.ipToInt(violation.ipAddress),
+      events_per_second: this.clampFloat(violation.eventsPerSecond, 0, 10000),
+      threshold_exceeded: this.clampFloat(violation.thresholdExceeded, 0, 10000),
+      auto_throttled: 1
+    };
+
+    try {
+      await this.client.insert({
+        table: 'rate_limit_violations',
+        values: [row],
+        format: 'JSONEachRow'
+      });
+    } catch (error) {
+      console.error('[ClickHouse] Failed to log violation:', error.message);
     }
   }
 
@@ -313,7 +423,11 @@ class ClickHouseService {
    */
   async healthCheck() {
     try {
-      const result = await this.client.query('SELECT 1').toPromise();
+      const resultSet = await this.client.query({
+        query: 'SELECT 1 as ok',
+        format: 'JSONEachRow'
+      });
+      const result = await resultSet.json();
       return { healthy: true, result };
     } catch (error) {
       return { healthy: false, error: error.message };
@@ -321,13 +435,21 @@ class ClickHouseService {
   }
 
   /**
-   * Close connection
+   * Graceful shutdown
    */
   async close() {
+    console.log('[ClickHouse] Shutting down...');
+    this.isShuttingDown = true;
+
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
     }
+
+    // Flush remaining events
     await this.flush();
+
+    await this.client.close();
+    console.log('[ClickHouse] Shutdown complete');
   }
 }
 

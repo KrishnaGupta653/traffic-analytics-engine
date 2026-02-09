@@ -1,5 +1,3 @@
-
-
 {
   "name": "traffic-analytics-server",
   "version": "1.0.0",
@@ -23,7 +21,7 @@
     "@fastify/cors": "^8.4.2",
     "@fastify/helmet": "^11.1.1",
     "@fastify/rate-limit": "^9.1.0",
-    "clickhouse": "^2.6.0",
+    "@clickhouse/client": "^0.2.5",
     "dotenv": "^16.3.1",
     "fastify": "^4.25.1",
     "geoip-lite": "^1.4.7",
