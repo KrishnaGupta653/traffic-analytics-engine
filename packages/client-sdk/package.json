@@ -10,9 +10,10 @@
     "index.d.ts"
   ],
   "scripts": {
+    "prebuild": "if not exist dist mkdir dist",
     "build": "npm run build:dev",
-    "build:dev": "cat src/session-hasher.js src/command-dispatcher.js src/tracker.js > dist/tracker.js",
-    "build:prod": "echo 'Install terser globally: npm i -g terser' && terser dist/tracker.js -o dist/tracker.min.js --compress --mangle || echo 'Skipping minification - terser not installed'"
+    "build:dev": "type src\\session-hasher.js src\\command-dispatcher.js src\\tracker.js > dist\\tracker.js",
+    "build:prod": "npm run build:dev && terser dist/tracker.js -o dist/tracker.min.js --compress --mangle"
   },
   "keywords": [
     "analytics",
@@ -22,5 +23,8 @@
     "fingerprinting"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "terser": "^5.27.0"
+  }
 }
