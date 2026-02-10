@@ -10,10 +10,10 @@
     "index.d.ts"
   ],
   "scripts": {
-    "prebuild": "if not exist dist mkdir dist",
-    "build": "npm run build:dev",
-    "build:dev": "type src\\session-hasher.js src\\command-dispatcher.js src\\tracker.js > dist\\tracker.js",
-    "build:prod": "npm run build:dev && terser dist/tracker.js -o dist/tracker.min.js --compress --mangle"
+    "prebuild": "node -e \"const fs = require('fs'); if (!fs.existsSync('dist')) fs.mkdirSync('dist', { recursive: true });\"",
+    "build": "node build.js",
+    "build:prod": "npm run build && npx terser dist/tracker.js -o dist/tracker.min.js --compress --mangle",
+    "watch": "node build.js --watch"
   },
   "keywords": [
     "analytics",

@@ -4,10 +4,12 @@
  */
 
 require('dotenv').config();
+const path = require('path');
 const Fastify = require('fastify');
 const cors = require('@fastify/cors');
 const helmet = require('@fastify/helmet');
 const rateLimit = require('@fastify/rate-limit');
+const fastifyStatic = require('@fastify/static');
 
 // Services
 const RedisService = require('./services/redis-service');
@@ -105,6 +107,13 @@ class TrafficAnalyticsServer {
       cache: 10000
     });
 
+    // Static file serving for client SDK
+    await this.fastify.register(fastifyStatic, {
+      root: path.join(__dirname, '../../client-sdk/dist'),
+      prefix: '/static/',
+      decorateReply: false
+    });
+
     console.log('[Server] Middleware configured');
   }
 
@@ -154,7 +163,8 @@ class TrafficAnalyticsServer {
       endpoints: {
         websocket: '/ws',
         admin: '/admin',
-        health: '/health'
+        health: '/health',
+        sdk: '/static/tracker.js'
       }
     }));
 
@@ -291,6 +301,7 @@ class TrafficAnalyticsServer {
 ║  WebSocket:      ws://${this.config.host}:${this.config.port}/ws                 ║
 ║  Admin API:      http://${this.config.host}:${this.config.port}/admin              ║
 ║  Health Check:   http://${this.config.host}:${this.config.port}/health             ║
+║  Client SDK:     http://${this.config.host}:${this.config.port}/static/tracker.js ║
 ║                                                            ║
 ║  Environment:    ${process.env.NODE_ENV || 'development'}                       ║
 ╚════════════════════════════════════════════════════════════╝
