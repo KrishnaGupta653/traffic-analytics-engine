@@ -1,0 +1,35 @@
+{
+  "name": "traffic-analytics-system",
+  "version": "1.0.0",
+  "description": "Real-Time Traffic Shaping & Analytics Platform",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd packages/client-sdk && npm install && cd ../server && npm install && cd ../dashboard && npm install",
+    "build:sdk": "cd packages/client-sdk && npm run build",
+    "dev:server": "cd packages/server && npm run dev",
+    "dev:dashboard": "cd packages/dashboard && npm run dev",
+    "dev:all": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
+    "start:server": "cd packages/server && npm start",
+    "start:dashboard": "cd packages/dashboard && npm start",
+    "test": "echo \"Error: no tests specified\" && exit 1"
+  },
+  "keywords": [
+    "analytics",
+    "traffic-shaping",
+    "websocket",
+    "real-time",
+    "telemetry"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  }
+}
