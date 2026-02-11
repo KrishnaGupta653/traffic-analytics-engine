@@ -1,33 +1,22 @@
-/**
- * ClickHouse Service - High-Volume Event Logging
- * FIXED: Using @clickhouse/client (correct library)
- * 
- * CRITICAL FIXES:
- * 1. Replaced deprecated 'clickhouse' with '@clickhouse/client'
- * 2. Fixed IP address handling (IPv4 to integer)
- * 3. Added proper error recovery
- * 4. Fixed SQL injection vulnerabilities
- * 5. Added query parameterization
- */
-
-const { createClient } = require('@clickhouse/client');
+const { createClient } = require("@clickhouse/client");
 
 class ClickHouseService {
   constructor(config = {}) {
     // SECURITY: Never log connection details
     this.client = createClient({
-      host: config.url || process.env.CLICKHOUSE_URL || 'http://localhost:8123',
-      database: config.database || process.env.CLICKHOUSE_DB || 'traffic_analytics',
+      host: config.url || process.env.CLICKHOUSE_URL || "http://localhost:8123",
+      database:
+        config.database || process.env.CLICKHOUSE_DB || "traffic_analytics",
       compression: {
         request: true,
-        response: true
+        response: true,
       },
       // PERFORMANCE: Set timeouts
       request_timeout: 30000,
-      max_open_connections: 10
+      max_open_connections: 10,
     });
 
-    this.database = config.database || 'traffic_analytics';
+    this.database = config.database || "traffic_analytics";
     this.batchSize = config.batchSize || 100;
     this.flushInterval = config.flushInterval || 5000;
 
@@ -38,7 +27,7 @@ class ClickHouseService {
     this.isShuttingDown = false;
 
     this.startFlushTimer();
-    console.log('[ClickHouse] Service initialized');
+    console.log("[ClickHouse] Service initialized");
   }
 
   /**
@@ -46,13 +35,13 @@ class ClickHouseService {
    */
   async logEvent(event) {
     if (this.isShuttingDown) {
-      console.warn('[ClickHouse] Rejecting event during shutdown');
+      console.warn("[ClickHouse] Rejecting event during shutdown");
       return;
     }
 
     // MEMORY LEAK FIX: Prevent unbounded queue growth
     if (this.eventQueue.length >= this.MAX_QUEUE_SIZE) {
-      console.error('[ClickHouse] Queue full, dropping event');
+      console.error("[ClickHouse] Queue full, dropping event");
       return;
     }
 
@@ -69,72 +58,143 @@ class ClickHouseService {
    */
   formatEventRow(event) {
     // VALIDATION: Ensure required fields exist
-    if (!event.sessionHash || typeof event.sessionHash !== 'string') {
-      throw new Error('Invalid session hash');
+    if (!event.sessionHash || typeof event.sessionHash !== "string") {
+      throw new Error("Invalid session hash");
     }
 
     return {
       // SECURITY: Sanitize all inputs
       session_hash: String(event.sessionHash).substring(0, 64),
-      event_type: String(event.eventType || event.type || 'unknown').substring(0, 50),
+      event_type: String(event.eventType || event.type || "unknown").substring(
+        0,
+        50,
+      ),
       timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-      
+
       // IP handling with validation
-      ip_address: this.ipToInt(event.ipAddress || '0.0.0.0'),
-      user_agent: String(event.userAgent || '').substring(0, 500),
-      
+      ip_address: this.ipToInt(event.ipAddress || "0.0.0.0"),
+      user_agent: String(event.userAgent || "").substring(0, 500),
+
       // GeoIP with bounds checking
-      country: String(event.country || event.geoip?.country || '').substring(0, 2),
-      city: String(event.city || event.geoip?.city || '').substring(0, 100),
-      isp: String(event.isp || '').substring(0, 255),
-      latitude: this.clampFloat(event.latitude || event.geoip?.latitude || 0, -90, 90),
-      longitude: this.clampFloat(event.longitude || event.geoip?.longitude || 0, -180, 180),
-      
+      country: String(event.country || event.geoip?.country || "").substring(
+        0,
+        2,
+      ),
+      city: String(event.city || event.geoip?.city || "").substring(0, 100),
+      isp: String(event.isp || "").substring(0, 255),
+      latitude: this.clampFloat(
+        event.latitude || event.geoip?.latitude || 0,
+        -90,
+        90,
+      ),
+      longitude: this.clampFloat(
+        event.longitude || event.geoip?.longitude || 0,
+        -180,
+        180,
+      ),
+
       // Device metadata with validation
-      screen_width: this.clampInt(event.screenWidth || event.metadata?.screenWidth || 0, 0, 10000),
-      screen_height: this.clampInt(event.screenHeight || event.metadata?.screenHeight || 0, 0, 10000),
-      timezone: String(event.timezone || event.metadata?.timezone || 'Unknown').substring(0, 50),
-      network_type: String(event.networkType || event.metadata?.networkType || 'unknown').substring(0, 20),
-      battery_level: this.clampInt(event.batteryLevel || event.metadata?.batteryLevel, 0, 100, true),
-      
+      screen_width: this.clampInt(
+        event.screenWidth || event.metadata?.screenWidth || 0,
+        0,
+        10000,
+      ),
+      screen_height: this.clampInt(
+        event.screenHeight || event.metadata?.screenHeight || 0,
+        0,
+        10000,
+      ),
+      timezone: String(
+        event.timezone || event.metadata?.timezone || "Unknown",
+      ).substring(0, 50),
+      network_type: String(
+        event.networkType || event.metadata?.networkType || "unknown",
+      ).substring(0, 20),
+      battery_level: this.clampInt(
+        event.batteryLevel || event.metadata?.batteryLevel,
+        0,
+        100,
+        true,
+      ),
+
       // Interaction data
-      interaction_type: String(event.interactionType || '').substring(0, 50),
-      element_tag: event.element?.tag ? String(event.element.tag).substring(0, 50) : null,
-      element_id: event.element?.id ? String(event.element.id).substring(0, 100) : null,
-      element_class: event.element?.class ? String(event.element.class).substring(0, 200) : null,
-      page_url: String(event.pageUrl || '').substring(0, 1000),
-      
+      interaction_type: String(event.interactionType || "").substring(0, 50),
+      element_tag: event.element?.tag
+        ? String(event.element.tag).substring(0, 50)
+        : null,
+      element_id: event.element?.id
+        ? String(event.element.id).substring(0, 100)
+        : null,
+      element_class: event.element?.class
+        ? String(event.element.class).substring(0, 200)
+        : null,
+      page_url: String(event.pageUrl || "").substring(0, 1000),
+
       // Performance metrics
       latency_ms: this.clampInt(event.latencyMs || 0, 0, 60000),
       is_throttled: event.isThrottled ? 1 : 0,
-      
+
       // Risk scoring
       risk_score: this.clampFloat(event.riskScore || 0, 0, 100),
       is_bot: event.isBot ? 1 : 0,
-      
+
       // SECURITY: Sanitize JSON payload
-      payload: JSON.stringify(event.payload || {}).substring(0, 10000)
+      payload: JSON.stringify(event.payload || {}).substring(0, 10000),
     };
   }
 
   /**
    * SECURITY: Validate and convert IP to integer
    */
+  // ipToInt(ip) {
+  //   if (!ip || ip === '0.0.0.0') return 0;
+
+  //   // IPv4 validation regex
+  //   const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  //   const match = ip.match(ipv4Regex);
+
+  //   if (!match) return 0;
+
+  //   const parts = match.slice(1).map(Number);
+
+  //   // Validate octets are 0-255
+  //   if (parts.some(p => p < 0 || p > 255)) return 0;
+
+  //   return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+  // }
+  /**
+   * SECURITY: Validate and convert IP to integer (IPv4 only, converts IPv6 to IPv4)
+   */
   ipToInt(ip) {
-    if (!ip || ip === '0.0.0.0') return 0;
-    
+    if (!ip || ip === "0.0.0.0") return 0;
+
+    // Handle IPv6-mapped IPv4 (::ffff:192.168.1.1)
+    if (ip.startsWith("::ffff:")) {
+      ip = ip.substring(7);
+    }
+
+    // Handle IPv6 localhost
+    if (ip === "::1" || ip === "::") {
+      ip = "127.0.0.1";
+    }
+
     // IPv4 validation regex
     const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
     const match = ip.match(ipv4Regex);
-    
-    if (!match) return 0;
-    
+
+    if (!match) {
+      console.warn(`[ClickHouse] Cannot convert IP to int: ${ip}`);
+      return 0;
+    }
+
     const parts = match.slice(1).map(Number);
-    
+
     // Validate octets are 0-255
-    if (parts.some(p => p < 0 || p > 255)) return 0;
-    
-    return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+    if (parts.some((p) => p < 0 || p > 255)) return 0;
+
+    return (
+      ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0
+    );
   }
 
   /**
@@ -167,21 +227,27 @@ class ClickHouseService {
 
     try {
       await this.client.insert({
-        table: 'events',
+        table: "events",
         values: batch,
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
 
       console.log(`[ClickHouse] ✓ Flushed ${batch.length} events`);
     } catch (error) {
-      console.error('[ClickHouse] ✗ Flush error:', error.message);
-      
+      console.error("[ClickHouse] ✗ Flush error:", error.message);
+
       // ERROR RECOVERY: Re-queue up to 1000 failed events
       if (this.eventQueue.length < 1000) {
-        this.eventQueue.unshift(...batch.slice(0, 1000 - this.eventQueue.length));
-        console.log(`[ClickHouse] Re-queued ${Math.min(batch.length, 1000)} events`);
+        this.eventQueue.unshift(
+          ...batch.slice(0, 1000 - this.eventQueue.length),
+        );
+        console.log(
+          `[ClickHouse] Re-queued ${Math.min(batch.length, 1000)} events`,
+        );
       } else {
-        console.error(`[ClickHouse] DROPPED ${batch.length} events - queue full`);
+        console.error(
+          `[ClickHouse] DROPPED ${batch.length} events - queue full`,
+        );
       }
     }
   }
@@ -194,7 +260,7 @@ class ClickHouseService {
       try {
         await this.flush();
       } catch (error) {
-        console.error('[ClickHouse] Timer flush error:', error);
+        console.error("[ClickHouse] Timer flush error:", error);
       }
     }, this.flushInterval);
   }
@@ -223,11 +289,11 @@ class ClickHouseService {
       const resultSet = await this.client.query({
         query,
         query_params: { minutes: Math.min(Math.max(1, minutesAgo), 1440) }, // Clamp 1-1440
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
       return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error.message);
+      console.error("[ClickHouse] Query error:", error.message);
       return [];
     }
   }
@@ -254,11 +320,11 @@ class ClickHouseService {
       const resultSet = await this.client.query({
         query,
         query_params: { hours: Math.min(Math.max(1, hoursAgo), 720) },
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
       return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error.message);
+      console.error("[ClickHouse] Query error:", error.message);
       return [];
     }
   }
@@ -288,11 +354,11 @@ class ClickHouseService {
       const resultSet = await this.client.query({
         query,
         query_params: { hours: Math.min(Math.max(1, hoursAgo), 24) },
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
       return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error.message);
+      console.error("[ClickHouse] Query error:", error.message);
       return [];
     }
   }
@@ -303,7 +369,7 @@ class ClickHouseService {
   async getSessionTimeline(sessionHash, limit = 100) {
     // SECURITY: Validate session hash format
     if (!/^[a-f0-9]{64}$/.test(sessionHash)) {
-      throw new Error('Invalid session hash format');
+      throw new Error("Invalid session hash format");
     }
 
     const query = `
@@ -325,13 +391,13 @@ class ClickHouseService {
         query,
         query_params: {
           hash: sessionHash,
-          limit: Math.min(Math.max(1, limit), 1000)
+          limit: Math.min(Math.max(1, limit), 1000),
         },
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
       return await resultSet.json();
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error.message);
+      console.error("[ClickHouse] Query error:", error.message);
       return [];
     }
   }
@@ -357,12 +423,12 @@ class ClickHouseService {
       const resultSet = await this.client.query({
         query,
         query_params: { hours: Math.min(Math.max(1, hoursAgo), 720) },
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
       const result = await resultSet.json();
       return result[0] || {};
     } catch (error) {
-      console.error('[ClickHouse] Query error:', error.message);
+      console.error("[ClickHouse] Query error:", error.message);
       return {};
     }
   }
@@ -374,23 +440,28 @@ class ClickHouseService {
     const row = {
       command_id: command.commandId,
       timestamp: new Date(),
-      session_hash: String(command.sessionHash || '').substring(0, 64),
+      session_hash: String(command.sessionHash || "").substring(0, 64),
       command_type: String(command.commandType).substring(0, 50),
-      admin_id: String(command.adminId || '').substring(0, 100),
-      admin_ip: this.ipToInt(command.adminIp || '0.0.0.0'),
-      command_payload: JSON.stringify(command.commandPayload || {}).substring(0, 5000),
-      execution_status: String(command.status || 'pending').substring(0, 20),
-      error_message: command.errorMessage ? String(command.errorMessage).substring(0, 500) : null
+      admin_id: String(command.adminId || "").substring(0, 100),
+      admin_ip: this.ipToInt(command.adminIp || "0.0.0.0"),
+      command_payload: JSON.stringify(command.commandPayload || {}).substring(
+        0,
+        5000,
+      ),
+      execution_status: String(command.status || "pending").substring(0, 20),
+      error_message: command.errorMessage
+        ? String(command.errorMessage).substring(0, 500)
+        : null,
     };
 
     try {
       await this.client.insert({
-        table: 'command_log',
+        table: "command_log",
         values: [row],
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
     } catch (error) {
-      console.error('[ClickHouse] Failed to log command:', error.message);
+      console.error("[ClickHouse] Failed to log command:", error.message);
     }
   }
 
@@ -403,18 +474,22 @@ class ClickHouseService {
       session_hash: String(violation.sessionHash).substring(0, 64),
       ip_address: this.ipToInt(violation.ipAddress),
       events_per_second: this.clampFloat(violation.eventsPerSecond, 0, 10000),
-      threshold_exceeded: this.clampFloat(violation.thresholdExceeded, 0, 10000),
-      auto_throttled: 1
+      threshold_exceeded: this.clampFloat(
+        violation.thresholdExceeded,
+        0,
+        10000,
+      ),
+      auto_throttled: 1,
     };
 
     try {
       await this.client.insert({
-        table: 'rate_limit_violations',
+        table: "rate_limit_violations",
         values: [row],
-        format: 'JSONEachRow'
+        format: "JSONEachRow",
       });
     } catch (error) {
-      console.error('[ClickHouse] Failed to log violation:', error.message);
+      console.error("[ClickHouse] Failed to log violation:", error.message);
     }
   }
 
@@ -424,8 +499,8 @@ class ClickHouseService {
   async healthCheck() {
     try {
       const resultSet = await this.client.query({
-        query: 'SELECT 1 as ok',
-        format: 'JSONEachRow'
+        query: "SELECT 1 as ok",
+        format: "JSONEachRow",
       });
       const result = await resultSet.json();
       return { healthy: true, result };
@@ -438,7 +513,7 @@ class ClickHouseService {
    * Graceful shutdown
    */
   async close() {
-    console.log('[ClickHouse] Shutting down...');
+    console.log("[ClickHouse] Shutting down...");
     this.isShuttingDown = true;
 
     if (this.flushTimer) {
@@ -449,7 +524,7 @@ class ClickHouseService {
     await this.flush();
 
     await this.client.close();
-    console.log('[ClickHouse] Shutdown complete');
+    console.log("[ClickHouse] Shutdown complete");
   }
 }
 

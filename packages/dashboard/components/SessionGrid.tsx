@@ -1,9 +1,5 @@
 'use client';
 
-/**
- * Session Grid - Real-Time Session Management Table
- * Professional white/blue control center aesthetic
- */
 
 import { useState, useEffect } from 'react';
 import { 
@@ -38,6 +34,7 @@ interface SessionGridProps {
 export default function SessionGrid({ onAction }: SessionGridProps) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'high-risk' | 'throttled'>('all');
 
   useEffect(() => {
@@ -57,12 +54,16 @@ export default function SessionGrid({ onAction }: SessionGridProps) {
           'X-API-Key': process.env.NEXT_PUBLIC_ADMIN_API_KEY || ''
         }
       });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       
       const data = await response.json();
       setSessions(data.sessions || []);
       setLoading(false);
     } catch (error) {
       console.error('Failed to load sessions:', error);
+      setError(error instanceof Error ? error.message : 'Failed to load sessions');
       setLoading(false);
     }
   };
@@ -77,6 +78,10 @@ export default function SessionGrid({ onAction }: SessionGridProps) {
         },
         body: JSON.stringify(payload || {})
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
 
       const result = await response.json();
       
@@ -136,7 +141,26 @@ export default function SessionGrid({ onAction }: SessionGridProps) {
     if (filter === 'throttled') return session.mode === 'downspin';
     return true;
   });
-
+  
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-8 text-center">
+        <div className="text-red-600 text-lg font-semibold mb-2">
+          ⚠️ Connection Error
+        </div>
+        <div className="text-red-800 mb-4">{error}</div>
+        <button
+          onClick={loadSessions}
+          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+        >
+          Retry
+        </button>
+        <div className="mt-4 text-sm text-gray-600">
+          Make sure the backend server is running on <code className="bg-gray-100 px-2 py-1 rounded">localhost:3000</code>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="space-y-4">
       {/* Filter Tabs */}

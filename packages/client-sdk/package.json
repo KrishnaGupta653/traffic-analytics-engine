@@ -10,7 +10,7 @@
     "index.d.ts"
   ],
   "scripts": {
-    "prebuild": "node -e \"const fs = require('fs'); if (!fs.existsSync('dist')) fs.mkdirSync('dist', { recursive: true });\"",
+    "prebuild": "node -e \"const fs=require('fs');if(!fs.existsSync('dist'))fs.mkdirSync('dist',{recursive:true})\"",
     "build": "node build.js",
     "build:prod": "npm run build && npx terser dist/tracker.js -o dist/tracker.min.js --compress --mangle",
     "watch": "node build.js --watch"
