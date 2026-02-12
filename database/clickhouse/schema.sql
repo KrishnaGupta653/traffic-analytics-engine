@@ -55,38 +55,94 @@ TTL timestamp + INTERVAL 90 DAY  -- Auto-delete after 90 days
 SETTINGS index_granularity = 8192;
 
 -- Materialized view for real-time session aggregations
-CREATE MATERIALIZED VIEW IF NOT EXISTS session_stats_mv
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (session_hash, toStartOfHour(timestamp))
-AS SELECT
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS session_stats_mv
+-- ENGINE = SummingMergeTree()
+-- PARTITION BY toYYYYMMDD(timestamp)
+-- ORDER BY (session_hash, toStartOfHour(timestamp))
+-- AS SELECT
+--     session_hash,
+--     toStartOfHour(timestamp) as hour,
+--     count() as event_count,
+--     uniq(event_type) as unique_events,
+--     avg(latency_ms) as avg_latency,
+--     max(latency_ms) as max_latency,
+--     sum(is_throttled) as throttle_count,
+--     max(risk_score) as max_risk_score,
+--     any(ip_address) as ip_address,
+--     any(country) as country,
+--     any(city) as city
+-- FROM events
+-- GROUP BY session_hash, hour;
+DROP VIEW IF EXISTS session_stats_mv;
+
+-- CREATE MATERIALIZED VIEW session_stats_mv
+-- ENGINE = SummingMergeTree
+-- PARTITION BY toYYYYMMDD(hour)
+-- ORDER BY (session_hash, hour)
+-- AS
+-- SELECT
+--     session_hash,
+--     toStartOfHour(timestamp) AS hour,
+--     count() AS event_count,
+--     uniq(event_type) AS unique_events,
+--     avg(latency_ms) AS avg_latency,
+--     max(latency_ms) AS max_latency,
+--     sum(is_throttled) AS throttle_count,
+--     max(risk_score) AS max_risk_score,
+--     any(ip_address) AS ip_address,
+--     any(country) AS country,
+--     any(city) AS city
+-- FROM events
+-- GROUP BY session_hash, hour;
+
+DROP VIEW IF EXISTS session_stats_mv;
+
+CREATE MATERIALIZED VIEW session_stats_mv
+ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMMDD(hour)
+ORDER BY (session_hash, hour)
+AS
+SELECT
     session_hash,
-    toStartOfHour(timestamp) as hour,
-    count() as event_count,
-    uniq(event_type) as unique_events,
-    avg(latency_ms) as avg_latency,
-    max(latency_ms) as max_latency,
-    sum(is_throttled) as throttle_count,
-    max(risk_score) as max_risk_score,
-    any(ip_address) as ip_address,
-    any(country) as country,
-    any(city) as city
+    toStartOfHour(timestamp) AS hour,
+    countState() AS event_count,
+    uniqState(event_type) AS unique_events,
+    avgState(latency_ms) AS avg_latency,
+    maxState(latency_ms) AS max_latency,
+    sumState(is_throttled) AS throttle_count,
+    maxState(risk_score) AS max_risk_score
 FROM events
 GROUP BY session_hash, hour;
 
 -- Materialized view for geographic analytics
-CREATE MATERIALIZED VIEW IF NOT EXISTS geo_stats_mv
-ENGINE = SummingMergeTree()
-PARTITION BY toYYYYMMDD(timestamp)
-ORDER BY (country, city, toStartOfHour(timestamp))
-AS SELECT
+-- CREATE MATERIALIZED VIEW IF NOT EXISTS geo_stats_mv
+-- ENGINE = SummingMergeTree()
+-- PARTITION BY toYYYYMMDD(timestamp)
+-- ORDER BY (country, city, toStartOfHour(timestamp))
+-- AS SELECT
+--     country,
+--     city,
+--     toStartOfHour(timestamp) as hour,
+--     count() as event_count,
+--     uniq(session_hash) as unique_sessions,
+--     avg(latency_ms) as avg_latency,
+--     avg(risk_score) as avg_risk_score
+-- FROM events
+-- GROUP BY country, city, hour;
+
+CREATE MATERIALIZED VIEW geo_stats_mv
+ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMMDD(hour)
+ORDER BY (country, city, hour)
+AS
+SELECT
     country,
     city,
-    toStartOfHour(timestamp) as hour,
-    count() as event_count,
-    uniq(session_hash) as unique_sessions,
-    avg(latency_ms) as avg_latency,
-    avg(risk_score) as avg_risk_score
+    toStartOfHour(timestamp) AS hour,
+    countState() AS event_count,
+    uniqState(session_hash) AS unique_sessions,
+    avgState(latency_ms) AS avg_latency,
+    avgState(risk_score) AS avg_risk_score
 FROM events
 GROUP BY country, city, hour;
 

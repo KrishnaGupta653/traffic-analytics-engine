@@ -1,0 +1,20 @@
+docker run -d \
+  --name clickhouse \
+  -p 8123:8123 \
+  -p 9000:9000 \
+  -e CLICKHOUSE_USER=admin \
+  -e CLICKHOUSE_PASSWORD=Password123 \
+  -e CLICKHOUSE_DB=traffic_analytics \
+  clickhouse/clickhouse-server:latest
+
+
+
+docker ps
+
+docker exec -it clickhouse clickhouse-client -u admin --password
+
+
+redis ->
+Test-NetConnection 127.0.0.1 -Port 6379
+
+curl "http://localhost:8123/?user=default&password=1234&query=SELECT%201"
